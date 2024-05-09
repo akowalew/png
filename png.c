@@ -15,8 +15,8 @@ typedef struct
 {
     u32 Cols;
     u32 Rows;
-    u32 Jump;
-    u32 Size;
+    u64 Jump;
+    u64 Size;
     u8* Data;
 } png;
 
@@ -177,6 +177,10 @@ static void PngDebugPrintf(const char* Fmt, ...)
     OutputDebugStringA(Buffer);
 }
 
+#define PngDebugBreak() __debugbreak()
+
+#define PngError(Fmt, ...) do { PngDebugPrintf("ERROR: " Fmt, __VA_ARGS__); PngDebugBreak(); } while(0)
+
 static b32 PngPopChunk(png_buf* Buf, png_chunk* Chunk)
 {
     b32 Result = 0;
@@ -184,18 +188,20 @@ static b32 PngPopChunk(png_buf* Buf, png_chunk* Chunk)
     u32 Len;
     if(PngPopU32(Buf, &Len))
     {
-        u32 Off = Len + sizeof(u32);
-        u8* Mem = PngPop(Buf, Off + sizeof(u32));
+        u32 Typ, Crc;
+        u32 Off = Len + sizeof(Typ);
+        u8* Mem = PngPop(Buf, Off + sizeof(Crc));
         if(Mem)
         {
-            u32 Crc = *(u32*)(Mem + Off);
+            Typ = *(u32*)(&Mem[0]);
+            Crc = *(u32*)(&Mem[Off]);
             u32 CrcReal = PNG_BSWP32(PngCrc(Mem, Off));
             if(Crc == CrcReal)
             {
                 PngDebugPrintf("Chunk %c%c%c%c of length %10ld bytes\n", Mem[0], Mem[1], Mem[2], Mem[3], Len);
                 Chunk->Len = Len;
-                Chunk->Typ = *(u32*)(Mem);
-                Chunk->Dat = Mem + sizeof(u32);
+                Chunk->Typ = Typ;
+                Chunk->Dat = &Mem[sizeof(Typ)];
                 Result = 1;
             }
         }
@@ -231,7 +237,6 @@ static const u8 PNG_HEADER[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 #define PNG_COMP_NONE            0
 #define PNG_COMP_FIXED_HUFFMAN   1
 #define PNG_COMP_DYNAMIC_HUFFMAN 2
-
 
 typedef struct
 {
@@ -295,7 +300,7 @@ static b32 PngParseCodeLengthsHuffmanTable(png_bstr* Bstr, u8 Total, u8* Lengths
     PngRefill(Bstr);
     if(Bstr->Nb < Total * 3)
     {
-        PngDebugPrintf("Failed to read code lengths\n");
+        PngError("Failed to read code lengths\n");
         return 0;
     }
 
@@ -379,7 +384,7 @@ static b32 PngParseLengths(png_bstr* Bstr, png_clht* ClHt, u8* Lengths, u32 Tota
         PngRefill(Bstr); // TODO: Can we reduce the number of refillings?
         if(Bstr->Nb < 14)
         {
-            PngDebugPrintf("Failed to read next symbol\n");
+            PngError("Failed to read next symbol\n");
             return 0;
         }
 
@@ -415,14 +420,14 @@ static b32 PngParseLengths(png_bstr* Bstr, png_clht* ClHt, u8* Lengths, u32 Tota
         }
         else
         {
-            PngDebugPrintf("Failed to decode length\n");
+            PngError("Failed to decode length\n");
             return 0;
         }
     }
 
     if(Idx != Total)
     {
-        PngDebugPrintf("Failed to parse lengths\n");
+        PngError("Failed to parse lengths\n");
         return 0;
     }
 
@@ -461,7 +466,7 @@ static b32 PngParseDynamicHuffmanTables(png_bstr* Bstr, png_hts* Hts)
 {
     if(Bstr->Nb < 5 + 5 + 4)
     {
-        PngDebugPrintf("Failed to read dynamic huffman table header\n");
+        PngError("Failed to read dynamic huffman table header\n");
         return 0;
     }
 
@@ -472,14 +477,14 @@ static b32 PngParseDynamicHuffmanTables(png_bstr* Bstr, png_hts* Hts)
     png_clht ClHt;
     if(!PngParseCodeLengthsHuffmanTable(Bstr, ClCount, ClHt.Lengths, ClHt.Codes))
     {
-        PngDebugPrintf("Failed to parse code lengths huffman table\n");
+        PngError("Failed to parse code lengths huffman table\n");
         return 0;
     }
 
     u32 Total = LitCount + DstCount;
     if(!PngParseLengths(Bstr, &ClHt, Hts->Lengths, Total))
     {
-        PngDebugPrintf("Failed to parse lengths\n");
+        PngError("Failed to parse lengths\n");
         return 0;
     }
 
@@ -521,7 +526,7 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
     PngRefill(Bstr);
     if(Bstr->Nb < 3)
     {
-        PngDebugPrintf("Failed to read deflate block header\n");
+        PngError("Failed to read deflate block header\n");
         return PNG_PARSE_FAILURE;
     }
 
@@ -541,7 +546,7 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
         {
             if(!PngParseDynamicHuffmanTables(Bstr, &DynamicHuffman))
             {
-                PngDebugPrintf("Failed to parse dynamic huffman table\n");
+                PngError("Failed to parse dynamic huffman table\n");
                 return PNG_PARSE_FAILURE;
             }
 
@@ -559,16 +564,16 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
             PngRefill(Bstr);
             if(Bstr->Nb < (15 + 5) + (15 + 13))
             {
-                PngDebugPrintf("Out of buffer\n");
+                PngError("Out of buffer\n");
                 return PNG_PARSE_FAILURE;
             }
 
             u16 LitLen = PngDecodeSymbol(Bstr, Hts->Lengths, Hts->Codes, Hts->LitCount);
             if(LitLen < 256)
             {
-                if(Img->Of >= sizeof(Img->Sz))
+                if(Img->Of >= Img->Sz)
                 {
-                    PngDebugPrintf("Out of image\n");
+                    PngError("Out of image\n");
                     return PNG_PARSE_FAILURE;
                 }
 
@@ -576,8 +581,7 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
             }
             else if(LitLen == 256)
             {
-                PngAssert(0);
-                break;
+                break; // End of block
             }
             else if(LitLen >= 257 && LitLen < Hts->LitCount)
             {
@@ -610,7 +614,7 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
                 u16 DistanceOffset = PngDecodeSymbol(Bstr, &Hts->Lengths[Hts->LitCount], &Hts->Codes[Hts->LitCount], Hts->DstCount);
                 if(DistanceOffset > 29)
                 {
-                    PngDebugPrintf("Failed to decode distance\n");
+                    PngError("Failed to decode distance\n");
                     return PNG_PARSE_FAILURE;
                 }
 
@@ -655,53 +659,56 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
                 i64 Position = Img->Of - DistanceTotal;
                 if(Position < 0)
                 {
-                    PngDebugPrintf("Invalid back distance decoded\n");
+                    PngError("Invalid back distance decoded\n");
                     return PNG_PARSE_FAILURE;
                 }
 
-                if(Img->Of + LengthTotal > sizeof(Img->Sz))
+                if(Img->Of + LengthTotal > Img->Sz)
                 {
-                    PngDebugPrintf("Out of image\n");
+                    PngError("Out of image\n");
                     return PNG_PARSE_FAILURE;
                 }
 
-                memcpy(&Img->At[Img->Of], &Img->At[Position], LengthTotal);
+                // TODO: Optimize this!!!
+                for(u64 Idx = 0; Idx < LengthTotal; Idx++)
+                {
+                    Img->At[Img->Of+Idx] = Img->At[Position+Idx];
+                }
+
                 Img->Of += LengthTotal;
             }
             else
             {
-                PngDebugPrintf("Literal symbol decode failed\n");
+                PngError("Literal symbol decode failed\n");
                 return PNG_PARSE_FAILURE;
             }
         }
     }
 
-    PngAssert(0);
-
     return BFINAL ? PNG_PARSE_FINAL_BLOCK : PNG_PARSE_NEXT_BLOCK;
 }
 
-static b32 PngParseIdat(png_chunk* Chunk, png_buf* Img)
+static b32 PngParseIdat(u8* Dat, u64 Len, png_buf* Img)
 {
-    if(Chunk->Len <= 2)
+    if(Len <= 2)
     {
-        PngDebugPrintf("Invalid IDAT chunk length: %d\n", Chunk->Len);
+        PngError("Invalid IDAT chunk length: %d\n", Len);
         return 0;
     }
 
-    u8 CMF = Chunk->Dat[0];
-    u8 FLG = Chunk->Dat[1];
+    u8 CMF = Dat[0];
+    u8 FLG = Dat[1];
     u8 CM    = CMF & 0x0f;
     u8 CINFO = CMF >> 4;
     if((CM != PNG_CM_DEFLATE) || (FLG & PNG_FLG_FDICT)  || ((CMF*256 + FLG) % 31))
     {
-        PngDebugPrintf("Invalid CM and/or FLG for IDAT: 0x%X 0x%02X\n", CM, FLG);
+        PngError("Invalid CM and/or FLG for IDAT: 0x%X 0x%02X\n", CM, FLG);
         return 0;
     }
 
     png_bstr Bstr;
-    Bstr.At = &Chunk->Dat[2];
-    Bstr.Sz = Chunk->Len - 2;
+    Bstr.At = &Dat[2];
+    Bstr.Sz = Len + 8; // IMPORTANT: Leave 8 byte space at the end to reduce number of if-s
     Bstr.Nb = 0;
     Bstr.Vl = 0;
 
@@ -717,12 +724,38 @@ static b32 PngParseIdat(png_chunk* Chunk, png_buf* Img)
     return Result;
 }
 
+#define PNG_FILTER_NONE    0
+#define PNG_FILTER_SUB     1
+#define PNG_FILTER_UP      2
+#define PNG_FILTER_AVERAGE 3
+#define PNG_FILTER_PAETH   4
+
+static inline u8 PngPaeth(u8 A, u8 B, u8 C)
+{
+    // TODO: Optimize this!!!
+    int PA = abs(B - C);
+    int PB = abs(A - C);
+    int PC = abs(A + B - 2 * C);
+    if(PA <= PB && PA <= PC)
+    {
+        return A;
+    }
+    else if(PB <= PC)
+    {
+        return B;
+    }
+    else
+    {
+        return C;
+    }
+}
+
 static b32 PngParse(png_buf* Buf, png* Png)
 {
     u8* Header = PngPop(Buf, sizeof(PNG_HEADER));
     if(!Header && memcmp(Header, PNG_HEADER, sizeof(PNG_HEADER)))
     {
-        PngDebugPrintf("Invalid or missing PNG header\n");
+        PngError("Invalid or missing PNG header\n");
         return 0;
     }
 
@@ -731,15 +764,18 @@ static b32 PngParse(png_buf* Buf, png* Png)
        Chunk.Typ != PNG_TYP('I','H','D','R') &&
        Chunk.Len < sizeof(png_ihdr))
     {
-        PngDebugPrintf("Invalid or missing IHDR chunk\n");
+        PngError("Invalid or missing IHDR chunk\n");
         return 0;
     }
 
     png_ihdr* IHDR = (png_ihdr*) Chunk.Dat;
-    u32 Cols = PNG_BSWP32(IHDR->Cols);
-    u32 Rows = PNG_BSWP32(IHDR->Rows);
-    u32 Jump = 0;
-    u32 Size = 0;
+    Png->Cols = PNG_BSWP32(IHDR->Cols);
+    Png->Rows = PNG_BSWP32(IHDR->Rows);
+
+    u32 Nbpp = 0;
+    u64 Nbpr = 0;
+    u64 RxdJump = 0;
+    u64 RxdSize = 0;
     if(IHDR->CompressionMethod == 0 &&
        IHDR->FilterMethod == 0 &&
        IHDR->InterlaceMethod == 0)
@@ -748,44 +784,53 @@ static b32 PngParse(png_buf* Buf, png* Png)
 
         if(IHDR->BitDepth == 8)
         {
-            if(IHDR->ColorType == 0 ||
-               IHDR->ColorType == PNG_CTYPE_COLOR ||
-               IHDR->ColorType == PNG_CTYPE_ALPHA ||
-               IHDR->ColorType == (PNG_CTYPE_COLOR|PNG_CTYPE_ALPHA))
+            if(IHDR->ColorType == (PNG_CTYPE_COLOR|PNG_CTYPE_ALPHA))
             {
-                Jump = Cols * 4 + 1; // One extra byte for FILTER byte in begin
-                Size = Jump * Rows;
+                Nbpp = 4;
+                Nbpr = Png->Cols * Nbpp;
+
+                RxdJump = 1 + Nbpr; // One extra byte for FILTER byte in begin of each line
+                RxdSize = RxdJump * Png->Rows;
+
+                Png->Jump = Nbpp + Nbpr; // One extra column in begin of each line for SUB filter
+                Png->Size = Png->Jump * (Png->Rows + 1); // One extra row in begin for UP filter
             }
             else
             {
-                PngDebugPrintf("Unsupported PNG color type: 0x%02X\n", IHDR->ColorType);
+                PngError("Unsupported PNG color type: 0x%02X\n", IHDR->ColorType);
                 return 0;
             }
         }
         else
         {
-            PngDebugPrintf("Unsupported PNG bit depth: %d\n", IHDR->BitDepth);
+            PngError("Unsupported PNG bit depth: %d\n", IHDR->BitDepth);
             return 0;
         }
     }
     else
     {
-        PngDebugPrintf("Unsupported CompressionMethod/FilterMethod/InterlaceMethod %d/%d/%d\n",
+        PngError("Unsupported CompressionMethod/FilterMethod/InterlaceMethod %d/%d/%d\n",
                        IHDR->CompressionMethod, IHDR->FilterMethod, IHDR->InterlaceMethod);
         return 0;
     }
 
+    // TODO: Maybe better is to use two allocations, so that the final image
+    // will not begin at the page boundary, which will improve cache coherency?
+    u64 Size = RxdSize + Png->Size;
+    // IMPORTANT: We assume that pages are zeroed!!!!!!
     u8* Data = PngAlloc(Size);
     if(!Data)
     {
-        PngDebugPrintf("Failed to allocate memory for PNG image\n");
+        PngError("Failed to allocate memory for PNG image\n");
         return 0;
     }
 
-    png_buf Img;
-    Img.At = Data;
-    Img.Sz = Size;
-    Img.Of = 0;
+    u8* RxdData = &Data[0];
+
+    png_buf Rxd;
+    Rxd.At = RxdData;
+    Rxd.Sz = RxdSize;
+    Rxd.Of = 0;
 
     b32 Result = 0;
     b32 Continue = 1;
@@ -795,14 +840,23 @@ static b32 PngParse(png_buf* Buf, png* Png)
         {
             case PNG_TYP('g','A','M','A'):
             {
-                PngDebugPrintf("Gamma correction not supported yet\n");
+                PngError("Gamma correction not supported yet\n");
             } break;
 
             case PNG_TYP('I','D','A','T'):
             {
-                if(!PngParseIdat(&Chunk, &Img))
+                if(Buf->Sz < 4)
                 {
-                    PngDebugPrintf("PNG IDAT chunk invalid");
+                    // IMPORTANT: Chunk ends with 32b CRC, and then MUST BE next the IEND chunk, so
+                    // there should be at least 8 bytes more in buffer than chunk needs. This check
+                    // helps to assume certain things in further parsing and reduces if-s statements.
+                    PngError("Invalid PNG file\n");
+                    Continue = 0;
+                }
+
+                if(!PngParseIdat(Chunk.Dat, Chunk.Len, &Rxd))
+                {
+                    PngError("PNG IDAT chunk invalid");
                     Continue = 0;
                 }
             } break;
@@ -817,8 +871,72 @@ static b32 PngParse(png_buf* Buf, png* Png)
 
     if(!Result)
     {
-        PngFree(Png->Data);
-        Png->Data = 0;
+        PngFree(Data);
+        return 0;
+    }
+
+    // Skip left margin for SUB filter and first column for UP filter
+    Png->Data = &Data[RxdSize + Png->Jump + Nbpp];
+
+    u8* RxdLine = RxdData;
+    u8* PngLine = Png->Data;
+    for(u64 Row = 0; Row < Png->Rows; Row++)
+    {
+        u8* RxdAt = RxdLine;
+        u8* PngAt = PngLine;
+
+        u8 Filter = *(RxdAt++);
+        switch(Filter)
+        {
+            case PNG_FILTER_SUB:
+            {
+                for(u64 Idx = 0; Idx < Nbpr; Idx++)
+                {
+                    // TODO: Optimize this!
+                    *PngAt = *RxdAt + *(PngAt - Nbpp);
+                    PngAt++; RxdAt++;
+                }
+            } break;
+
+            case PNG_FILTER_UP:
+            {
+                for(u64 Idx = 0; Idx < Nbpr; Idx++)
+                {
+                    // TODO: Optimize this!
+                    *PngAt = *RxdAt + *(PngAt - Png->Jump);
+                    PngAt++; RxdAt++;
+                }
+            } break;
+
+            case PNG_FILTER_AVERAGE:
+            {
+                for(u64 Idx = 0; Idx < Nbpr; Idx++)
+                {
+                    // TODO: Optimize this!
+                    *PngAt = *RxdAt + (*(PngAt - Nbpp) + *(PngAt - Png->Jump)) / 2;
+                    PngAt++; RxdAt++;
+                }
+            } break;
+
+            case PNG_FILTER_PAETH:
+            {
+                for(u64 Idx = 0; Idx < Nbpr; Idx++)
+                {
+                    // TODO: Optimize this!
+                    *PngAt = *RxdAt + PngPaeth(*(PngAt - Nbpp), *(PngAt - Png->Jump), *(PngAt - Png->Jump - Nbpp));
+                    PngAt++; RxdAt++;
+                }
+            } break;
+
+            default:
+                PngDebugPrintf("Unrecognized filter type for line %d: 0x%02X\n", Row, Filter);
+            case PNG_FILTER_NONE: // fallthrough
+                memcpy(PngAt, RxdAt, Nbpr);
+            break;
+        }
+
+        RxdLine += RxdJump;
+        PngLine += Png->Jump;
     }
 
     return 1;
