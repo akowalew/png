@@ -101,7 +101,7 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdSho
 
         BITMAPINFO BitmapInfo = {0};
         BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
-        BitmapInfo.bmiHeader.biWidth = Png.Cols;
+        BitmapInfo.bmiHeader.biWidth = Png.Cols + 1;
         BitmapInfo.bmiHeader.biHeight = -(int)(Png.Rows);
         BitmapInfo.bmiHeader.biPlanes = 1;
         BitmapInfo.bmiHeader.biBitCount = 32;
@@ -115,13 +115,13 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdSho
 #if 0
         StretchDIBits(Hdc,
                       0, 0, ClientCols, ClientRows,
-                      0, 0, Png.Cols, Png.Rows, Png.Data,
+                      1, 0, Png.Cols + 1, Png.Rows, Png.Data,
                       &BitmapInfo, DIB_RGB_COLORS, SRCCOPY);
 #else
         SetDIBitsToDevice(Hdc,
                           0, 0,
                           Png.Cols, Png.Rows,
-                          0, 0, 0,
+                          1, 0, 0,
                           Png.Rows,
                           Png.Data,
                           &BitmapInfo,
