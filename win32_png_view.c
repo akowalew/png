@@ -62,7 +62,7 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdSho
                                PNAME, PNAME,
                                WS_OVERLAPPEDWINDOW|WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT,
-                               CW_USEDEFAULT, CW_USEDEFAULT,
+                               Png.Cols, Png.Rows,
                                0, 0, Instance, 0);
     if(!Hwnd)
     {
@@ -112,7 +112,13 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdSho
         BitmapInfo.bmiHeader.biClrUsed = 0;
         BitmapInfo.bmiHeader.biClrImportant = 0;
 
-#if 0
+#if 1
+        if(!SetStretchBltMode(Hdc, HALFTONE))
+        {
+            MessageBoxA(Hwnd, "Failed to stretch mode", PNAME, MB_OK|MB_ICONERROR);
+            return -1;
+        }
+
         StretchDIBits(Hdc,
                       0, 0, ClientCols, ClientRows,
                       1, 0, Png.Cols + 1, Png.Rows, Png.Data,
