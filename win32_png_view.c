@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <gL/gl.h>
 
 #include "png.c"
 
@@ -30,6 +31,23 @@ static LRESULT WindowProc(HWND Hwnd, UINT Umsg, WPARAM Wpar, LPARAM Lpar)
     return DefWindowProc(Hwnd, Umsg, Wpar, Lpar);
 }
 
+static void Win32CheckFailed(const char* File, int Line, const char* Expr)
+{
+    char String[4096];
+    DWORD LastError = GetLastError();
+    size_t size = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM,
+                                 NULL,
+                                 LastError,
+                                 MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                 String,
+                                 sizeof(String)-1,
+                                 NULL);
+
+    MessageBoxA(0, String, PNAME, MB_OK|MB_ICONERROR);
+}
+
+#define Win32Check(x) if(!(x)) { Win32CheckFailed(__FILE__, __LINE__, #x); __debugbreak(); }
+
 int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdShow)
 {
     png Png;
@@ -52,30 +70,65 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdSho
     WindowClassEx.lpszMenuName = 0;
     WindowClassEx.lpszClassName = PNAME;
     WindowClassEx.hIconSm = 0;
-    if(!RegisterClassEx(&WindowClassEx))
-    {
-        MessageBoxA(0, "Failed to register window class", PNAME, MB_OK|MB_ICONERROR);
-        return -1;
-    }
+    Win32Check(RegisterClassEx(&WindowClassEx));
 
-    HWND Hwnd = CreateWindowEx(WS_EX_OVERLAPPEDWINDOW,
+    DWORD Style = WS_OVERLAPPEDWINDOW|WS_VISIBLE;
+    DWORD ExStyle = WS_EX_OVERLAPPEDWINDOW;
+
+    RECT WindowRect;
+    WindowRect.left = 0;
+    WindowRect.right = Png.Cols;
+    WindowRect.top = 0;
+    WindowRect.bottom = Png.Rows;
+    Win32Check(AdjustWindowRectEx(&WindowRect, Style, 0, ExStyle));
+    i32 WindowCols = WindowRect.right - WindowRect.left;
+    i32 WindowRows = WindowRect.bottom - WindowRect.top;
+
+    HWND Hwnd = CreateWindowEx(ExStyle,
                                PNAME, PNAME,
-                               WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+                               Style,
                                CW_USEDEFAULT, CW_USEDEFAULT,
-                               Png.Cols, Png.Rows,
+                               WindowCols, WindowRows,
                                0, 0, Instance, 0);
-    if(!Hwnd)
-    {
-        MessageBoxA(0, "Failed to create window", PNAME, MB_OK|MB_ICONERROR);
-        return -1;
-    }
+    Win32Check(Hwnd);
 
     HDC Hdc = GetDC(Hwnd);
-    if(!Hdc)
-    {
-        MessageBoxA(Hwnd, "Failed to get device context", PNAME, MB_OK|MB_ICONERROR);
-        return -1;
-    }
+    Win32Check(Hdc);
+
+    PIXELFORMATDESCRIPTOR PixelFormatDescriptor = {0};
+    PixelFormatDescriptor.nSize = sizeof(PixelFormatDescriptor);
+    PixelFormatDescriptor.nVersion = 1;
+    PixelFormatDescriptor.dwFlags = PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
+    PixelFormatDescriptor.iPixelType = PFD_TYPE_RGBA;
+    PixelFormatDescriptor.cColorBits = 32;
+    PixelFormatDescriptor.cAlphaBits = 8;
+    PixelFormatDescriptor.iLayerType = PFD_MAIN_PLANE;
+
+    int SuggestedPixelFormatIndex = ChoosePixelFormat(Hdc, &PixelFormatDescriptor);
+    Win32Check(SuggestedPixelFormatIndex);
+    Win32Check(DescribePixelFormat(Hdc, SuggestedPixelFormatIndex, sizeof(PixelFormatDescriptor), &PixelFormatDescriptor));
+    Win32Check(SetPixelFormat(Hdc, SuggestedPixelFormatIndex, &PixelFormatDescriptor));
+
+    HGLRC Hglrc = wglCreateContext(Hdc);
+    Win32Check(Hglrc);
+    Win32Check(wglMakeCurrent(Hdc, Hglrc));
+
+    #define GL_BGRA                           0x80E1 // TODO: We should check for that extension
+
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    u32 Texture;
+    glGenTextures(1, &Texture);
+    glBindTexture(GL_TEXTURE_2D, Texture);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, Png.Cols+1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Png.Cols, Png.Rows, 0, GL_RGBA, GL_UNSIGNED_BYTE, Png.Data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
     MSG Msg;
     BOOL Result;
@@ -99,40 +152,50 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, PSTR CmdLine, int CmdSho
         int ClientCols = ClientRect.right - ClientRect.left;
         int ClientRows = ClientRect.bottom - ClientRect.top;
 
-        BITMAPINFO BitmapInfo = {0};
-        BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
-        BitmapInfo.bmiHeader.biWidth = Png.Cols + 1;
-        BitmapInfo.bmiHeader.biHeight = -(int)(Png.Rows);
-        BitmapInfo.bmiHeader.biPlanes = 1;
-        BitmapInfo.bmiHeader.biBitCount = 32;
-        BitmapInfo.bmiHeader.biCompression = BI_RGB;
-        BitmapInfo.bmiHeader.biSizeImage = 0;
-        BitmapInfo.bmiHeader.biXPelsPerMeter = 0;
-        BitmapInfo.bmiHeader.biYPelsPerMeter = 0;
-        BitmapInfo.bmiHeader.biClrUsed = 0;
-        BitmapInfo.bmiHeader.biClrImportant = 0;
+        glViewport(0, 0, ClientCols, ClientRows);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
 
-#if 1
-        if(!SetStretchBltMode(Hdc, HALFTONE))
+        glMatrixMode(GL_TEXTURE);
+        glLoadIdentity();
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+
+        glBegin(GL_TRIANGLES);
         {
-            MessageBoxA(Hwnd, "Failed to stretch mode", PNAME, MB_OK|MB_ICONERROR);
-            return -1;
-        }
+            //
+            // First Triangle
+            //
 
-        StretchDIBits(Hdc,
-                      0, 0, ClientCols, ClientRows,
-                      1, 0, Png.Cols + 1, Png.Rows, Png.Data,
-                      &BitmapInfo, DIB_RGB_COLORS, SRCCOPY);
-#else
-        SetDIBitsToDevice(Hdc,
-                          0, 0,
-                          Png.Cols, Png.Rows,
-                          1, 0, 0,
-                          Png.Rows,
-                          Png.Data,
-                          &BitmapInfo,
-                          DIB_RGB_COLORS);
-#endif
+            glTexCoord2f(0.0f, 1.0f);
+            glVertex2f(-1.0f, -1.0f);
+
+            glTexCoord2f(0.0f, 0.0f);
+            glVertex2f(-1.0f, +1.0f);
+
+            glTexCoord2f(1.0f, 1.0f);
+            glVertex2f(+1.0f, -1.0f);
+
+            //
+            // Second Triangle
+            //
+
+            glTexCoord2f(1.0f, 1.0f);
+            glVertex2f(+1.0f, -1.0f);
+
+            glTexCoord2f(1.0f, 0.0f);
+            glVertex2f(+1.0f, +1.0f);
+
+            glTexCoord2f(0.0f, 0.0f);
+            glVertex2f(-1.0f, +1.0f);
+        }
+        glEnd();
+
+        SwapBuffers(Hdc);
     }
 
     return 0;
