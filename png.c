@@ -1,3 +1,7 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <windows.h>
+
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -913,7 +917,7 @@ static b32 PngParse(png_buf* Buf, png* Png)
                 for(u64 Idx = 0; Idx < Nbpr; Idx++)
                 {
                     // TODO: Optimize this!
-                    *PngAt = *RxdAt + (*(PngAt - Nbpp) + *(PngAt - Png->Jump)) / 2;
+                    *PngAt = *RxdAt + (*(PngAt - Nbpp) + *(PngAt - Png->Jump)) / 4;
                     PngAt++; RxdAt++;
                 }
             } break;

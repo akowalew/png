@@ -32,3 +32,9 @@ How can you learn it if you don't write it first? ;) I am kind of guy that is le
 Surprise - just hit `build.bat` and you are in!
 
 Then just run `png_view.exe test.png` and just look on it!
+
+## Testing
+
+Surprise again - just hit 'test.bat' and let it test!
+
+It will load reference test PNG file and compare it with uncompressed reference BMP file.

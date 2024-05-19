@@ -1,6 +1,3 @@
-#include <windows.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <gL/gl.h>
 
 #include "png.c"
