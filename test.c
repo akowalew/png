@@ -1,5 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include "png.c"
-
 #include <assert.h>
 
 typedef struct
@@ -150,8 +150,6 @@ static b32 BmpLoad(const char* Path, bmp* Bmp)
     return Result;
 }
 
-
-
 #define Assert(x) if(!(x)) { if(IsDebuggerPresent()) { __debugbreak(); } fprintf(stderr, "Assertion failed: %s, file %s, line %d\n", #x, __FILE__, __LINE__); exit(-1); }
 
 int main(int Argc, char** Argv)
@@ -159,37 +157,46 @@ int main(int Argc, char** Argv)
     bmp Bmp;
     png Png;
 
-    Assert(BmpLoad("test.bmp", &Bmp));
-    Assert(PngLoad("test.png", &Png));
-    Assert(Bmp.Cols == Png.Cols);
-    Assert(Bmp.Rows == Png.Rows);
-    u8 *BmpData = &Bmp.Data[Bmp.Size - Bmp.Jump];
-    u8 *PngData = Png.Data;
-    for(u32 Row = 0; Row < Png.Rows; Row++)
+    for(u32 Idx = 1; Idx <= 2; Idx++)
     {
-        u8* BmpAt = (u8*) BmpData;
-        u8* PngAt = (u8*) PngData;
-
-        for(u32 Col = 0; Col < Png.Cols; Col++)
+        char BmpPath[64], PngPath[64];
+        sprintf(BmpPath, "test_%u.bmp", Idx);
+        sprintf(PngPath, "test_%u.png", Idx);
+        fprintf(stdout, "%s... ", PngPath);
+        Assert(BmpLoad(BmpPath, &Bmp));
+        Assert(PngLoad(PngPath, &Png));
+        Assert(Bmp.Cols == Png.Cols);
+        Assert(Bmp.Rows == Png.Rows);
+        u8 *BmpData = &Bmp.Data[Bmp.Size - Bmp.Jump];
+        u8 *PngData = Png.Data;
+        for(u32 Row = 0; Row < Png.Rows; Row++)
         {
-            // TODO: SIMD
+            u8* BmpAt = (u8*) BmpData;
+            u8* PngAt = (u8*) PngData;
 
-            u8 PngR = PngAt[0], PngG = PngAt[1], PngB = PngAt[2], PngA = PngAt[3];
-            u8 BmpB = BmpAt[0], BmpG = BmpAt[1], BmpR = BmpAt[2], BmpA = BmpAt[3];
-
-            if(PngR != BmpR ||
-               PngG != BmpG ||
-               PngB != BmpB ||
-               PngA != BmpA)
+            for(u32 Col = 0; Col < Png.Cols; Col++)
             {
-                Assert(0);
+                // TODO: SIMD
+
+                u8 PngR = PngAt[0], PngG = PngAt[1], PngB = PngAt[2], PngA = PngAt[3];
+                u8 BmpB = BmpAt[0], BmpG = BmpAt[1], BmpR = BmpAt[2], BmpA = BmpAt[3];
+
+                if(PngR != BmpR ||
+                   PngG != BmpG ||
+                   PngB != BmpB ||
+                   PngA != BmpA)
+                {
+                    Assert(0);
+                }
+
+                BmpAt += 4;
+                PngAt += 4;
             }
 
-            BmpAt += 4;
-            PngAt += 4;
+            BmpData -= Bmp.Jump;
+            PngData += Png.Jump;
         }
 
-        BmpData -= Bmp.Jump;
-        PngData += Png.Jump;
+        fprintf(stdout, "OK\n");
     }
 }

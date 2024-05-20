@@ -538,7 +538,59 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
     u8 BTYPE = (u8) PngPopBits(Bstr, 2);
     if(BTYPE == PNG_COMP_NONE)
     {
-        PngAssert(0); // Not implemented yet
+        u8 Skip = 8 - ((64 - Bstr->Nb) & 7);
+        if(Bstr->Nb < Skip + 32)
+        {
+            PngError("Out of buffer\n");
+            return PNG_PARSE_FAILURE;
+        }
+
+        PngPopBits(Bstr, Skip);
+        u16 LEN  = (u16) PngPopBits(Bstr, 16);
+        u16 NLEN = (u16) PngPopBits(Bstr, 16);
+        if(0xFFFF - LEN != NLEN)
+        {
+            PngError("Invalid LEN/NLEN pair\n");
+            return PNG_PARSE_FAILURE;
+        }
+
+        if(Img->Of + LEN > Img->Sz)
+        {
+            PngError("Out of image\n");
+            return PNG_PARSE_FAILURE;
+        }
+
+        u16 CNT = Bstr->Nb / 8;
+        if(CNT > LEN)
+        {
+            CNT = LEN;
+        }
+
+        u16 NBR = LEN - CNT;
+        if(Bstr->Sz < NBR)
+        {
+            PngError("Out of buffer\n");
+            return PNG_PARSE_FAILURE;
+        }
+
+        // TODO: Optimize this!!!
+
+        u8* At = &Img->At[Img->Of];
+
+        Bstr->Nb = (u8) (Bstr->Nb - CNT * 8);
+        while(CNT--)
+        {
+            *(At++) = Bstr->Vl & 0xFF;
+            Bstr->Vl >>= 8;
+        }
+
+        Bstr->Sz -= NBR;
+        while(NBR--)
+        {
+            *(At++) = *(Bstr->At++);
+        }
+
+        Img->Of += LEN;
     }
     else
     {
@@ -756,6 +808,8 @@ static inline u8 PngPaeth(u8 A, u8 B, u8 C)
 
 static b32 PngParse(png_buf* Buf, png* Png)
 {
+    PngDebugPrintf("Parsing buffer of size %u bytes\n", Buf->Sz);
+
     u8* Header = PngPop(Buf, sizeof(PNG_HEADER));
     if(!Header && memcmp(Header, PNG_HEADER, sizeof(PNG_HEADER)))
     {
@@ -844,7 +898,7 @@ static b32 PngParse(png_buf* Buf, png* Png)
         {
             case PNG_TYP('g','A','M','A'):
             {
-                PngError("Gamma correction not supported yet\n");
+                PngDebugPrintf("Gamma correction not supported yet\n");
             } break;
 
             case PNG_TYP('I','D','A','T'):
@@ -917,7 +971,7 @@ static b32 PngParse(png_buf* Buf, png* Png)
                 for(u64 Idx = 0; Idx < Nbpr; Idx++)
                 {
                     // TODO: Optimize this!
-                    *PngAt = *RxdAt + (*(PngAt - Nbpp) + *(PngAt - Png->Jump)) / 4;
+                    *PngAt = *RxdAt + (*(PngAt - Nbpp) + *(PngAt - Png->Jump)) / 2;
                     PngAt++; RxdAt++;
                 }
             } break;
