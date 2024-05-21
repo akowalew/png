@@ -259,7 +259,6 @@ static void PngRefill(png_bstr* Bstr)
 
         if(!Bstr->Sz)
         {
-            PngDebugPrintf("Out of buffer\n");
             break;
         }
 
@@ -343,7 +342,7 @@ static b32 PngParseCodeLengthsHuffmanTable(png_bstr* Bstr, u8 Total, u8* Lengths
     return 1;
 }
 
-#define PNG_NCODES (286 + 32 + 138)
+#define PNG_NCODES (288 + 32 + 138)
 
 typedef struct
 {
@@ -506,7 +505,7 @@ static u16 PngDecodeSymbol(png_bstr* Bstr, const u8* Lengths, const u16* Codes, 
     while(Result < Total)
     {
         u8 Len = Lengths[Result];
-        if(Len)
+        if(Len/* && Bstr->Nb >= Len*/)
         {
             // TODO: SLOW
             u16 Code = Codes[Result];
@@ -536,6 +535,8 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
 
     u8 BFINAL = (u8) PngPopBits(Bstr, 1);
     u8 BTYPE = (u8) PngPopBits(Bstr, 2);
+    PngDebugPrintf("Parsing deflate block final=%d type=%d\n", BFINAL, BTYPE);
+
     if(BTYPE == PNG_COMP_NONE)
     {
         u8 Skip = 8 - ((64 - Bstr->Nb) & 7);
@@ -594,7 +595,7 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
     }
     else
     {
-        static const png_hts FixedHuffman = {0};
+        png_hts FixedHuffman;
         png_hts DynamicHuffman;
 
         const png_hts* Hts;
@@ -610,7 +611,45 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
         }
         else
         {
-            PngAssert(0);
+            FixedHuffman.LitCount = 288;
+
+            for(u32 Idx = 0; Idx <= 143; Idx++)
+            {
+                u16 Code = (u16) (0x30 + Idx);
+                FixedHuffman.Codes[Idx] = PNG_REVBITS16(Code) >> (16 - 8);
+                FixedHuffman.Lengths[Idx] = 8;
+            }
+
+            for(u32 Idx = 144; Idx <= 255; Idx++)
+            {
+                u16 Code = (u16) (0x190 + Idx - 144);
+                FixedHuffman.Codes[Idx] = PNG_REVBITS16(Code) >> (16 - 9);
+                FixedHuffman.Lengths[Idx] = 9;
+            }
+
+            for(u32 Idx = 256; Idx <= 279; Idx++)
+            {
+                u16 Code = (u16) (0x0 + Idx - 256);
+                FixedHuffman.Codes[Idx] = PNG_REVBITS16(Code) >> (16 - 7);
+                FixedHuffman.Lengths[Idx] = 7;
+            }
+
+            for(u32 Idx = 280; Idx <= 287; Idx++)
+            {
+                u16 Code = (u16) (0xC0 + Idx - 280);
+                FixedHuffman.Codes[Idx] = PNG_REVBITS16(Code) >> (16 - 8);
+                FixedHuffman.Lengths[Idx] = 8;
+            }
+
+            FixedHuffman.DstCount = 30;
+            for(u32 Idx = 0; Idx <= 29; Idx++)
+            {
+                u16 Code = (u16) (0x0 + Idx - 0);
+                FixedHuffman.Codes[FixedHuffman.LitCount + Idx] = PNG_REVBITS16(Code) >> (16 - 5);
+                FixedHuffman.Lengths[FixedHuffman.LitCount + Idx] = (u16) 5;
+            }
+            FixedHuffman.Codes[FixedHuffman.LitCount + 30] = (u16) 65535;
+            FixedHuffman.Lengths[FixedHuffman.LitCount + 30] = (u16) 255;
 
             Hts = &FixedHuffman;
         }
@@ -618,12 +657,6 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
         while(1)
         {
             PngRefill(Bstr);
-            if(Bstr->Nb < (15 + 5) + (15 + 13))
-            {
-                PngError("Out of buffer\n");
-                return PNG_PARSE_FAILURE;
-            }
-
             u16 LitLen = PngDecodeSymbol(Bstr, Hts->Lengths, Hts->Codes, Hts->LitCount);
             if(LitLen < 256)
             {
@@ -664,11 +697,18 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
                 };
 
                 u8 LengthOffset = (u8) (LitLen - 257);
-                u16 LengthExtra = (u16) PngPopBits(Bstr, LengthsExtraBits[LengthOffset]);
+                u8 LengthExtraCnt = LengthsExtraBits[LengthOffset];
+                if(Bstr->Nb < LengthExtraCnt)
+                {
+                    PngError("Failed to get extra bits for length\n");
+                    return PNG_PARSE_FAILURE;
+                }
+
+                u16 LengthExtra = (u16) PngPopBits(Bstr, LengthExtraCnt);
                 u16 LengthTotal = LengthExtra + LengthsBases[LengthOffset];
 
                 u16 DistanceOffset = PngDecodeSymbol(Bstr, &Hts->Lengths[Hts->LitCount], &Hts->Codes[Hts->LitCount], Hts->DstCount);
-                if(DistanceOffset > 29)
+                if(DistanceOffset > Hts->DstCount)
                 {
                     PngError("Failed to decode distance\n");
                     return PNG_PARSE_FAILURE;
@@ -710,7 +750,14 @@ static b32 PngParseDeflateBlock(png_bstr* Bstr, png_buf* Img)
                     13, 13      // 28 - 29
                 };
 
-                u16 DistanceExtra = (u16) PngPopBits(Bstr, DistancesExtraBits[DistanceOffset]);
+                u8 DistanceExtraCnt = DistancesExtraBits[DistanceOffset];
+                if(Bstr->Nb < DistanceExtraCnt)
+                {
+                    PngError("Failed to get distance extra bits\n");
+                    return PNG_PARSE_FAILURE;
+                }
+
+                u16 DistanceExtra = (u16) PngPopBits(Bstr, DistanceExtraCnt);
                 u32 DistanceTotal = DistanceExtra + DistancesBases[DistanceOffset];
                 i64 Position = Img->Of - DistanceTotal;
                 if(Position < 0)
@@ -756,7 +803,9 @@ static b32 PngParseIdat(u8* Dat, u64 Len, png_buf* Img)
     u8 FLG = Dat[1];
     u8 CM    = CMF & 0x0f;
     u8 CINFO = CMF >> 4;
-    if((CM != PNG_CM_DEFLATE) || (FLG & PNG_FLG_FDICT)  || ((CMF*256 + FLG) % 31))
+    if((CM != PNG_CM_DEFLATE) ||
+       (FLG & PNG_FLG_FDICT)  ||
+       ((CMF*256 + FLG) % 31))
     {
         PngError("Invalid CM and/or FLG for IDAT: 0x%X 0x%02X\n", CM, FLG);
         return 0;
@@ -764,20 +813,29 @@ static b32 PngParseIdat(u8* Dat, u64 Len, png_buf* Img)
 
     png_bstr Bstr;
     Bstr.At = &Dat[2];
-    Bstr.Sz = Len + 8; // IMPORTANT: Leave 8 byte space at the end to reduce number of if-s
+    Bstr.Sz = Len - 2;
     Bstr.Nb = 0;
     Bstr.Vl = 0;
 
-    b32 Result;
-    while((Result = PngParseDeflateBlock(&Bstr, Img)) != PNG_PARSE_FAILURE)
+    while(Bstr.Sz || Bstr.Nb)
     {
-        if(Result == PNG_PARSE_FINAL_BLOCK)
+        b32 Result = PngParseDeflateBlock(&Bstr, Img);
+        if(Result == PNG_PARSE_FAILURE)
+        {
+            return 0;
+        }
+        else if(Result == PNG_PARSE_FINAL_BLOCK)
         {
             break;
         }
     }
 
-    return Result;
+    if(Bstr.Sz || Bstr.Nb)
+    {
+        PngDebugPrintf("More data left %d %d!\n", Bstr.Sz, Bstr.Nb);
+    }
+
+    return 1;
 }
 
 #define PNG_FILTER_NONE    0
@@ -820,7 +878,7 @@ static b32 PngParse(png_buf* Buf, png* Png)
     png_chunk Chunk;
     if(!PngPopChunk(Buf, &Chunk) &&
        Chunk.Typ != PNG_TYP('I','H','D','R') &&
-       Chunk.Len < sizeof(png_ihdr))
+       Chunk.Len != sizeof(png_ihdr))
     {
         PngError("Invalid or missing IHDR chunk\n");
         return 0;
@@ -903,14 +961,14 @@ static b32 PngParse(png_buf* Buf, png* Png)
 
             case PNG_TYP('I','D','A','T'):
             {
-                if(Buf->Sz < 4)
-                {
-                    // IMPORTANT: Chunk ends with 32b CRC, and then MUST BE next the IEND chunk, so
-                    // there should be at least 8 bytes more in buffer than chunk needs. This check
-                    // helps to assume certain things in further parsing and reduces if-s statements.
-                    PngError("Invalid PNG file\n");
-                    Continue = 0;
-                }
+                // if(Buf->Sz < 4)
+                // {
+                //     // IMPORTANT: Chunk ends with 32b CRC, and then MUST BE next the IEND chunk, so
+                //     // there should be at least 8 bytes more in buffer than chunk needs. This check
+                //     // helps to assume certain things in further parsing and reduces if-s statements.
+                //     PngError("Invalid PNG file\n");
+                //     Continue = 0;
+                // }
 
                 if(!PngParseIdat(Chunk.Dat, Chunk.Len, &Rxd))
                 {
@@ -1003,6 +1061,8 @@ static b32 PngParse(png_buf* Buf, png* Png)
 static b32 PngLoad(const char* Path, png* Png)
 {
     b32 Result = 0;
+
+    PngDebugPrintf("Loading png from: %s\n", Path);
 
     png_buf Buf;
     if(PngLoadFile(Path, &Buf))
