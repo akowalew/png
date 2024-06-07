@@ -1,6 +1,6 @@
-#include <gL/gl.h>
-
 #include "png.c"
+
+#include <gL/gl.h>
 
 #define PNAME "PngView"
 
